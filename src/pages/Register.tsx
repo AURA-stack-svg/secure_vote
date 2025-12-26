@@ -94,7 +94,6 @@ const DISTRICTS: { [key: string]: string[] } = {
 interface PersonalInfo {
   fullName: string;
   dateOfBirth: string;
-  mobileNumber: string;
   aadhaarNumber: string;
   state: string;
   district: string;
@@ -119,7 +118,6 @@ export default function Register() {
   const [personalInfo, setPersonalInfo] = useState<PersonalInfo>({
     fullName: "",
     dateOfBirth: "",
-    mobileNumber: "+91 ",
     aadhaarNumber: "",
     state: "",
     district: "",
@@ -260,6 +258,31 @@ export default function Register() {
     }
   };
 
+  const handleRescan = async () => {
+    // 1. Pause everything first
+    setIsProcessing(true);
+    setDetectionMessage("🔄 Resetting scanner...");
+    processingRef.current = true; // Block any running loops
+
+    // 2. Clear data nicely
+    setBiometricData({
+      stage1Captured: false,
+      stage2Captured: false,
+      stage3Captured: false,
+      stage4Captured: false,
+    });
+    setBiometricImages({});
+
+    // 3. Wait for UI to catch up and loops to settle
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    // 4. Restart fresh
+    setCurrentStage(1);
+    setIsProcessing(false);
+    processingRef.current = false; // Unlock
+    setDetectionMessage("🎥 Ready. Position your face for Stage 1");
+  };
+
   // Load face-api models on mount
   useEffect(() => {
     const loadModels = async () => {
@@ -356,41 +379,60 @@ export default function Register() {
           const jaw = landmarks.getJawOutline();
           const jawLeft = jaw[0];
           const jawRight = jaw[16];
+          const leftEye = landmarks.getLeftEye()[0];  // Added missing definition
+          const rightEye = landmarks.getRightEye()[3]; // Added missing definition
 
+          // Custom Pose Estimation (Heuristics)
           const faceWidth = jawRight.x - jawLeft.x;
-          const noseX = nose.x - jawLeft.x;
-          const yawRatio = noseX / faceWidth;
+          // Calculate midpoint between eyes
+          const eyesMidX = (leftEye.x + rightEye.x) / 2;
+
+          // Compare nose position relative to eye midpoint
+          // Normalize by face width to handle distance
+          const yawOffset = (nose.x - eyesMidX) / faceWidth;
+
+          // Pitch (Up/Down)
+          // Compare nose Y to eye line Y
+          const eyesMidY = (leftEye.y + rightEye.y) / 2;
+          const noseEyeDist = nose.y - eyesMidY;
+          // Normalize by face height (approx via width or jaw)
+          const pitchRatio = noseEyeDist / faceWidth;
+          // Smaller ratio = Nose higher (Looking Up)
 
           let isPoseCorrect = false;
 
-          // ... Pose logic ...
+          // Refined Thresholds based on relative features
           if (currentStage === 1) { // Front
-            if (yawRatio > 0.35 && yawRatio < 0.65) {
+            // Center: Offset near 0
+            if (Math.abs(yawOffset) < 0.1 && pitchRatio > 0.25) { // 0.25 check ensures not looking too far up
               setDetectionMessage("✅ Perfect! Hold steady...");
               isPoseCorrect = true;
             } else {
-              setDetectionMessage("Look straight at the camera");
+              setDetectionMessage(Math.abs(yawOffset) >= 0.1 ? "Look straight ahead" : "Lower your chin slightly");
             }
           } else if (currentStage === 2) { // Left
-            if (yawRatio < 0.45) {
+            // User turns Left -> Nose moves Left -> Offset becomes negative
+            if (yawOffset < -0.15) { // Threshold for left turn
               setDetectionMessage("✅ Good! Hold...");
               isPoseCorrect = true;
             } else {
               setDetectionMessage("⬅️ Turn head LEFT");
             }
           } else if (currentStage === 3) { // Right
-            if (yawRatio > 0.55) {
+            // User turns Right -> Nose moves Right -> Offset becomes positive
+            if (yawOffset > 0.15) { // Threshold for right turn
               setDetectionMessage("✅ Good! Hold...");
               isPoseCorrect = true;
             } else {
               setDetectionMessage("➡️ Turn head RIGHT");
             }
           } else if (currentStage === 4) { // Up
-            if (yawRatio > 0.3 && yawRatio < 0.7) {
+            // Looking Up -> Nose closer to eyes -> Ratio decreases
+            if (pitchRatio < 0.25) {
               setDetectionMessage("✅ Hold that (Up)...");
               isPoseCorrect = true;
             } else {
-              setDetectionMessage("Look up slightly");
+              setDetectionMessage("⬆️ Tilt head UP");
             }
           }
 
@@ -466,10 +508,7 @@ export default function Register() {
     return age >= 18;
   };
 
-  const validateMobileNumber = (mobile: string): boolean => {
-    const digits = mobile.replace("+91", "").trim();
-    return /^\d{10}$/.test(digits);
-  };
+  /* Removed validateMobileNumber */
 
   const validateAadhaar = (aadhaar: string): boolean => {
     const digits = aadhaar.replace(/\s/g, "");
@@ -487,9 +526,7 @@ export default function Register() {
     } else if (!validateAge(personalInfo.dateOfBirth)) {
       newErrors.dateOfBirth = "You must be at least 18 years old";
     }
-    if (!validateMobileNumber(personalInfo.mobileNumber)) {
-      newErrors.mobileNumber = "Mobile number must be 10 digits (after +91)";
-    }
+    /* Removed mobile validation */
     if (!validateAadhaar(personalInfo.aadhaarNumber)) {
       newErrors.aadhaarNumber = "Aadhaar must be exactly 12 digits";
     }
@@ -708,30 +745,7 @@ export default function Register() {
                       )}
                     </div>
 
-                    {/* Mobile Number */}
-                    <div>
-                      <label className="block text-white font-semibold mb-2">Mobile Number</label>
-                      <input
-                        type="tel"
-                        value={personalInfo.mobileNumber}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          if (value.startsWith("+91") && /^[+91\d\s]*$/.test(value)) {
-                            setPersonalInfo({ ...personalInfo, mobileNumber: value });
-                            setErrors({ ...errors, mobileNumber: "" });
-                          }
-                        }}
-                        className={`w-full px-4 py-3 rounded-lg bg-neutral-800 border ${errors.mobileNumber ? "border-red-500" : "border-neutral-700"
-                          } text-white focus:outline-none focus:border-blue-500`}
-                        placeholder="+91 XXXXXXXXXX"
-                      />
-                      {errors.mobileNumber && (
-                        <p className="text-red-500 text-sm mt-2 flex items-center gap-2">
-                          <AlertCircle className="h-4 w-4" />
-                          {errors.mobileNumber}
-                        </p>
-                      )}
-                    </div>
+                    {/* Mobile Number Removed */}
 
                     {/* Aadhaar Number */}
                     <div>
@@ -1011,6 +1025,24 @@ export default function Register() {
                           </p>
                           <p className="text-gray-300 text-sm">{detectionMessage}</p>
                         </div>
+
+                        {/* Success Overlay on Video */}
+                        {biometricData.stage1Captured &&
+                          biometricData.stage2Captured &&
+                          biometricData.stage3Captured &&
+                          biometricData.stage4Captured && (
+                            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center text-center p-6 z-10 transition-all duration-500">
+                              <CheckCircle2 className="h-16 w-16 text-green-500 mb-4 animate-bounce" />
+                              <h3 className="text-3xl font-black text-white mb-2">Face Scan Complete!</h3>
+                              <p className="text-green-300 font-medium mb-6">All angles captured successfully.</p>
+                              <button
+                                onClick={handleRescan}
+                                className="px-6 py-2 bg-white/10 hover:bg-white/20 text-white rounded-full font-semibold transition-colors border border-white/30 backdrop-blur-md"
+                              >
+                                ↺ Rescan
+                              </button>
+                            </div>
+                          )}
                       </div>
                     )}
 
@@ -1028,12 +1060,11 @@ export default function Register() {
                       ) : (
                         <>
                           <button
-                            onClick={() => manualCaptureStage(currentStage)}
-                            disabled={isProcessing || biometricData[`stage${currentStage}Captured` as keyof BiometricData]}
-                            className="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50"
+                            onClick={handleRescan}
+                            className="px-6 py-3 bg-yellow-600 text-white rounded-lg font-semibold hover:bg-yellow-700 transition-colors flex items-center gap-2"
                           >
-                            <Zap className="h-5 w-5" />
-                            {isProcessing ? "Capturing..." : `Capture Stage ${currentStage}`}
+                            <Zap className="h-4 w-4" />
+                            Restart Scan
                           </button>
                           <button
                             onClick={stopCamera}
@@ -1089,21 +1120,7 @@ export default function Register() {
                       ))}
                     </div>
 
-                    {biometricData.stage1Captured &&
-                      biometricData.stage2Captured &&
-                      biometricData.stage3Captured &&
-                      biometricData.stage4Captured && (
-                        <motion.div
-                          initial={{ opacity: 0, scale: 0.9 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          className="bg-green-500/10 border border-green-500/50 rounded-lg p-4"
-                        >
-                          <p className="text-green-300 flex items-center gap-2 font-semibold">
-                            <CheckCircle2 className="h-5 w-5" />
-                            All biometric stages captured successfully!
-                          </p>
-                        </motion.div>
-                      )}
+                    {/* Old success message below video removed in favor of overlay */}
 
                     <canvas ref={displayCanvasRef} className="hidden" />
                   </motion.div>
@@ -1132,10 +1149,7 @@ export default function Register() {
                           <p className="text-gray-400 text-sm">Date of Birth</p>
                           <p className="text-white font-semibold">{personalInfo.dateOfBirth}</p>
                         </div>
-                        <div>
-                          <p className="text-gray-400 text-sm">Mobile Number</p>
-                          <p className="text-white font-semibold">{personalInfo.mobileNumber}</p>
-                        </div>
+                        {/* Mobile Number Removed */}
                         <div>
                           <p className="text-gray-400 text-sm">Aadhaar (Masked)</p>
                           <p className="text-white font-semibold">{maskAadhaar(personalInfo.aadhaarNumber)}</p>
